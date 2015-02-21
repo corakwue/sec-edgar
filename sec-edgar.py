@@ -41,7 +41,7 @@ class SECEdgar(object):
     """
     Fetches filings typically 8-K forms from SEC Edgar database.
     Used to create 8-k corpus for (NLP) sentiment analysis.
-    
+
     Use at your own risk. SEC anonymous FTP prefers queries during market hours.
     """
     FTP_ADDR = "ftp.sec.gov"
@@ -50,40 +50,40 @@ class SECEdgar(object):
 
     CACHE_FORMAT = 'SEC-EDGAR-FILLING-INDEX-{start}-{end}.csv'
     IDX_FORMAT = 'edgar/full-index/{year}/QTR{qtr}/master.idx'
-    
+
     ER_CORPUS_DIR = os.path.join(os.path.expanduser("~"),
         'sec_edgar',
         'data'
     )
-    
+
     def __init__(self, start_year=1993):
         self.start_year = start_year
         self.ftp = ftplib.FTP(self.FTP_ADDR)
-                
+
         self._last_quarter = Timestamp('now') - QuarterEnd(1)
-        self.periods = period_range(self.start_year, 
-                                    self._last_quarter, 
+        self.periods = period_range(self.start_year,
+                                    self._last_quarter,
                                     freq='Q')
-        
-        self._start = '{year}Q{qtr}'.format(year=self.periods[0].year, 
+
+        self._start = '{year}Q{qtr}'.format(year=self.periods[0].year,
                                             qtr=self.periods[0].quarter)
-        
-        self._end = '{year}Q{qtr}'.format(year=self.periods[-1].year, 
-                                          qtr=self.periods[-1].quarter)                                
-        self.CACHE = os.path.join(self.ER_CORPUS_DIR, 
+
+        self._end = '{year}Q{qtr}'.format(year=self.periods[-1].year,
+                                          qtr=self.periods[-1].quarter)
+        self.CACHE = os.path.join(self.ER_CORPUS_DIR,
                                   self.CACHE_FORMAT.format(start=self._start,
                                                            end=self._end))
-        
+
         self.archive = DataFrame(columns=self.COLUMNS)
-        
-        
+
+
     def run(self, form_type='8-K', index=None, ensure_func=None):
         SECEdgar.mkdir(self.ER_CORPUS_DIR)
         self.ftp.login()
         self.get_listings()
         self.get_fillings(form_type=form_type, index=index, ensure_func=ensure_func)
         self.ftp.close()
-        
+
     @property
     def idx_listings(self):
         """
@@ -98,29 +98,28 @@ class SECEdgar(object):
         self.ftp.retrbinary('RETR %s' % filename, buffer.write)
         return buffer
 
-
     def fix_archive(self):
         self.archive['Company Name'] = \
             self.archive['Company Name'].apply(SECEdgar.clean_company_name)
 
         self.archive = self.archive.set_index('CIK')
         self.archive.drop('Unnamed: 0', inplace=True)
-        
+
     def get_listings(self):
         """
         Download all idx files at once
         """
-        
+
         if os.path.exists(self.CACHE):
-            logger.info("Fetching from cache started.")
+            logger.info("Fetching from cache.")
             self.archive = read_csv(self.CACHE)
             self.fix_archive()
         else:
             logger.info("Index download started.")
-            
+
             for _file in self.idx_listings:
                 self.archive = self.archive.append(self.text_to_dataframe(self.get(_file)))
-        
+
             #self.ftp.close()
             logger.info("Index download complete.")
             self.fix_archive()
@@ -130,9 +129,9 @@ class SECEdgar(object):
     def get(self, file, skip_headers=True):
         """
         Download and returns content of an idx file from SEC EDGAR Database.
-        """   
+        """
         logger.info('Downloading {}'.format(file))
-        
+
         with tempfile.TemporaryFile() as tmp:
             self.ftp_retr(file, tmp)
             tmp.seek(0)
@@ -159,34 +158,34 @@ class SECEdgar(object):
     def clean_company_name(company_name):
         return re.sub('/\w+/', '', company_name).strip().upper()
 
-
     def get_fillings(self, form_type='8-K', index=None, ensure_func=None):
         """Fetches form-8-Ks
-        
+
         index: Index, Default <None>
             If provided, downloads filings for companys in the index/
         ensure_func: function, Default <None>
             Function to return on filing to ensure its what's expected.
-            
+
         """
-        
+
         sec_archive = self.archive[self.archive['Form Type'] == form_type]
-        
+
         ciks = {}
         ciks_to_symbol = {}
         if index:
             # Expects index object from xantos plaform.
             index.initialize()
             index_components = index.components.index.tolist()
+
             for symbol in index_components:
                 cik = SECEdgar.get_cik(symbol)
                 if cik:
                     ciks[symbol] = cik
                     ciks_to_symbol[cik] = symbol
-        
-        # If error, then I'd be damned, someone didnt follow SEC rules           
+
+        # If error, then I'd be damned, someone didnt follow SEC rules
         sec_archive = sec_archive.ix[ciks.values()] if ciks else sec_archive
-        
+
         for comp, group in sec_archive.groupby('Company Name'):
             cik = int(group.index.unique()[0])
             if cik in ciks_to_symbol:
@@ -196,27 +195,27 @@ class SECEdgar(object):
             # ignore non-publicly traded entities
             if not symbol:
                 continue
-            
+
             logger.info('Getting Form {form_type} for {symbol}'.format(symbol=symbol,
                         form_type=form_type))
-            
+
             ticker_dir = os.path.join(self.ER_CORPUS_DIR, symbol)
             self.mkdir(ticker_dir)
-            
+
             for idx, _file in enumerate(group['Filename']):
-                
+
                 filepath = os.path.join(ticker_dir,
                     '{symbol}-{filingdate}-{form_type}.txt'.format(
                         symbol=symbol,
                         filingdate=group['Date Filed'].iloc[idx],
                         form_type=form_type))
-                   
+
                 # Already exists, skip it
                 if os.path.exists(filepath):
                     continue
 
                 contents = self.get(_file, skip_headers=False)
-                
+
                 # Don't save if content is ehn?
                 if ensure_func and not ensure_func(contents):
                     continue
@@ -226,7 +225,7 @@ class SECEdgar(object):
 
     @staticmethod
     def get_cik(symbol):
-      """Returns Central Index Key (CIK) used in SEC EDGAR to identify 
+      """Returns Central Index Key (CIK) used in SEC EDGAR to identify
       companies and individuals. None otherwise"""
       URL = "http://finance.yahoo.com/q/sec?s=%s+SEC+Filings" % (symbol)
       try:
@@ -236,16 +235,16 @@ class SECEdgar(object):
       except:
           logger.warn('Unable to get CIK for {}'.format(symbol))
           return
-    
+
     @staticmethod
     def get_ticker(company_name):
         """Given company name - return ticker(s).
         Indirect way to check if company if publicly traded.
         """
         from urllib import quote
-    
+
         logger.info('Getting symbol for {}'.format(company_name))
-        
+
         def _decode_list(data):
             rv = []
             for item in data:
@@ -257,7 +256,7 @@ class SECEdgar(object):
                     item = _decode_dict(item)
                 rv.append(item)
             return rv
-    
+
         def _decode_dict(data):
             rv = {}
             for key, value in data.iteritems():
@@ -271,7 +270,7 @@ class SECEdgar(object):
                     value = _decode_dict(value)
                 rv[key] = value
             return rv
-    
+
         url = 'http://d.yimg.com/autoc.finance.yahoo.com/autoc?query=%s&callback=YAHOO.Finance.SymbolSuggest.ssCallback'% quote(company_name)
         try:
             query_result = urllib2.urlopen(url).read()
@@ -285,14 +284,14 @@ class SECEdgar(object):
             pass
 
 def ensure_er(text):
-        """Ensure text is earnings release i.e. has `Exhibit 99.1`"""
-        pattern = re.compile('\.*Ex\.*99.1\.*', re.IGNORECASE)
-        return re.search(pattern, text)
+    """Ensure text is earnings release i.e. has `Exhibit 99<.1>`"""
+    pattern = re.compile('.*Ex.*99.*', re.IGNORECASE)
+    return re.search(pattern, text)
 
 def main():
 
     # Grab SEC archive for 8-K Forms for all companies in provided index
-    sec_edgar = SECEdgar(start_year=2014)
+    sec_edgar = SECEdgar(start_year=2000)
     sec_edgar.run(index=index, ensure_func=ensure_er)
 
 if __name__ == '__main__':
